@@ -22,6 +22,9 @@ zephyr_library_sources_ifdef(CONFIG_MCUMGR_SMP_SHELL
 zephyr_library_sources_ifdef(CONFIG_MCUMGR_SMP_UART
   src/smp_uart.c
 )
+zephyr_library_sources_ifdef(CONFIG_MCUMGR_SMP_I2C
+  src/smp_i2c.c
+)
 zephyr_library_sources_ifdef(CONFIG_MCUMGR_SMP_UDP
   src/smp_udp.c
 )

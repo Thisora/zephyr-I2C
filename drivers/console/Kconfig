@@ -187,6 +187,30 @@ config IPM_CONSOLE_LINE_BUF_LEN
 	  IPM console line buffer length specify amount of the buffer
 	  where characters are stored before sending the whole line.
 
+config I2C_MCUMGR
+	bool "Mcumgr I2C driver"
+	select I2C_INTERRUPT_DRIVEN
+	help
+	  TODO
+
+if I2C_MCUMGR
+
+config I2C_MCUMGR_RX_BUF_SIZE
+	int "Size of receive buffer for mcumgr fragments received over I2C, in bytes"
+	default 128
+	help
+	  Specifies the size of the mcumgr I2C receive buffer, in bytes. This
+	  value must be large enough to accommodate any line sent by an mcumgr
+	  client.
+
+config I2C_MCUMGR_RX_BUF_COUNT
+	int "Number of receive buffers for mcumgr fragments received over I2C"
+	default 2
+	help
+	  TODO
+
+endif #I2C_MCUMGR
+
 config UART_MCUMGR
 	bool "Mcumgr UART driver"
 	select UART_INTERRUPT_DRIVEN
@@ -206,6 +230,7 @@ config UART_MCUMGR_RX_BUF_SIZE
 	  Specifies the size of the mcumgr UART receive buffer, in bytes. This
 	  value must be large enough to accommodate any line sent by an mcumgr
 	  client.
+
 
 config UART_MCUMGR_RX_BUF_COUNT
 	int "Number of receive buffers for mcumgr fragments received over UART"

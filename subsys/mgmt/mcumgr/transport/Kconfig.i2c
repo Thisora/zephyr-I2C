@@ -1,0 +1,20 @@
+# Copyright Runtime.io 2018. All rights reserved.
+# Copyright Nordic Semiconductor ASA 2020. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+menuconfig MCUMGR_SMP_I2C
+	bool "I2C mcumgr SMP transport"
+	select I2C_MCUMGR #TODO : create this config
+	select BASE64
+	help
+	  Enables handling of SMP commands received over I2C.
+
+
+config MCUMGR_SMP_I2C_MTU
+	int "I2C SMP MTU"
+	default 256
+	depends on MCUMGR_SMP_I2C
+	help
+	  Maximum size of SMP frames sent and received over I2C, in bytes.
+	  This value must satisfy the following relation:
+	  MCUMGR_SMP_I2C_MTU <= MCUMGR_BUF_SIZE + 2
