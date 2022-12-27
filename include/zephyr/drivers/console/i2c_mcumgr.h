@@ -29,6 +29,18 @@ struct i2c_mcumgr_rx_buf {
 	int length;
 };
 
+/**
+ * @brief As I2C is master oriented, this structure contain
+ * a response to transmit to master. This contain data that
+ * will be transmitted on next data read request from master
+ * @a send is use as an iterator to save what has already been sent
+ */
+struct i2c_mcumgr_tx_buf {
+	uint8_t data[CONFIG_I2C_MCUMGR_TX_BUF_SIZE];
+	int length;
+	int send;
+};
+
 /** @typedef i2c_mcumgr_recv_fn
  * @brief Function that gets called when an mcumgr packet is received.
  *
