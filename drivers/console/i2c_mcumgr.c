@@ -15,6 +15,7 @@
 #include <zephyr/mgmt/mcumgr/transport/serial.h>
 #include <zephyr/drivers/console/i2c_mcumgr.h>
 #include <zephyr/irq.h>
+#include <zephyr/sys/ring_buffer.h>
 
 static const struct device *const i2c_mcumgr_dev =
 	DEVICE_DT_GET(DT_CHOSEN(zephyr_i2c_mcumgr));
@@ -34,7 +35,7 @@ static struct i2c_target_config i2c_slave_conf;
 static bool i2c_mcumgr_ignoring;
 /** Contain the response to send to the controller **/
 
-static struct i2c_mcumgr_tx_buf* i2c_mcumgr_next_buf; 
+// static struct i2c_mcumgr_tx_buf* i2c_mcumgr_next_buf; 
 
 /** Contains buffers to hold incoming request fragments. */
 K_MEM_SLAB_DEFINE(i2c_mcumgr_slab_rx, sizeof(struct i2c_mcumgr_rx_buf),
@@ -43,6 +44,8 @@ K_MEM_SLAB_DEFINE(i2c_mcumgr_slab_rx, sizeof(struct i2c_mcumgr_rx_buf),
 /** Contains buffers that hold response until controller ask for it */
 K_MEM_SLAB_DEFINE(i2c_mcumgr_slab_tx, sizeof(struct i2c_mcumgr_tx_buf),
 		  CONFIG_I2C_MCUMGR_TX_BUF_COUNT, 1);
+
+RING_BUF_DECLARE(i2c_mcumgr_ring_tx, 512); /* TODO !! 512 in config */
 
 static struct i2c_mcumgr_rx_buf *i2c_mcumgr_alloc_rx_buf(void)
 {
@@ -60,35 +63,15 @@ static struct i2c_mcumgr_rx_buf *i2c_mcumgr_alloc_rx_buf(void)
 	return rx_buf;
 }
 
-static struct i2c_mcumgr_tx_buf* i2c_mcumgr_alloc_tx(void) {
 
-	printk("Allocating a new TX buf\n");
-	struct i2c_mcumgr_tx_buf* tx_buf;
-	void *block;
-	int rc;
-	rc = k_mem_slab_alloc(&i2c_mcumgr_slab_tx, &block, K_NO_WAIT);
-	if(rc != 0){
-		return NULL;
-	}
-	tx_buf = block;
-	tx_buf->length = 0;
-	tx_buf->send = 0;
-	return tx_buf;
-}
 
 void i2c_mcumgr_free_rx_buf(struct i2c_mcumgr_rx_buf *rx_buf)
 {
+	unsigned int key = irq_lock();
 	void *block;
 	block = rx_buf;
 	k_mem_slab_free(&i2c_mcumgr_slab_rx, &block);
-}
-
-void i2c_mcumgr_free_tx_buf(struct i2c_mcumgr_tx_buf *tx_buf)
-{
-	void *block;
-	block = tx_buf;
-	k_mem_slab_free(&i2c_mcumgr_slab_tx, &block);
-	printk("!!Mem fred!!\n");
+	irq_unlock(key);
 }
 
 static int i2c_mcumgr_wreq_isr(struct i2c_target_config *config){
@@ -96,6 +79,7 @@ static int i2c_mcumgr_wreq_isr(struct i2c_target_config *config){
 }
 
 static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
+	unsigned int key = irq_lock();
 	struct i2c_mcumgr_rx_buf *rx_buf;
 
 	/* init buffer to save incoming fragment */
@@ -119,12 +103,10 @@ static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
 			i2c_mcumgr_cur_buf = NULL;
 			i2c_mcumgr_ignoring = true;
 		}else{
-			/* All good storing data to the buffer */
+			/* All good ! Storing data to the buffer */
 			if(val != 0x05){
 				rx_buf->data[rx_buf->length++] = val;
-			}/*else{
-				printk("Ok it was a read request\n");
-			}*/
+			}
 		}
 	}
 	/* Check if fragment is complete */
@@ -144,30 +126,33 @@ static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
 			printk(" Rx new frag: len: %d\n", rx_buf->length);
 		}
 	}
+
+	irq_unlock(key);
 	return 0;
 }
 
 static int i2c_mcumgr_rreq_isr(struct i2c_target_config *config, uint8_t * val){
 	unsigned int key = irq_lock();
-	
-	if(i2c_mcumgr_next_buf == NULL){
-		printk("[I2C mcumgr] RREQ error\n");
-		return -1;
-	}
 
-	if (i2c_mcumgr_next_buf->send < i2c_mcumgr_next_buf->length) {
-		*val = i2c_mcumgr_next_buf->data[i2c_mcumgr_next_buf->send++];
-		printk("[I2C mcumgr] responding: %u (%d/%d bytes send)\n", *val, i2c_mcumgr_next_buf->send, i2c_mcumgr_next_buf->length);
-	}else {
-		printk("[I2C mcumgr] Resp totally send \n");
-		/* Response is totally send */
-		i2c_mcumgr_free_tx_buf(i2c_mcumgr_next_buf);
-		i2c_mcumgr_next_buf = NULL;
+	if (ring_buf_is_empty(&i2c_mcumgr_ring_tx) == 0) {
+		int ret = ring_buf_get(&i2c_mcumgr_ring_tx, val, 1);
+		if(ret != 1){
+			printk("[I2C RING] can't get value from buffer\n");
+			irq_unlock(key);
+			return -1;
+		}else{
+
+		printk("[I2C mcumgr] responding: %u (%d/%d bytes send)\n", *val,
+		       ring_buf_size_get(&i2c_mcumgr_ring_tx), ring_buf_capacity_get(&i2c_mcumgr_ring_tx));
+		}
+	} else {
+		printk("[I2C mcumgr] No data to send \n");
+		/* Signify to master that no more datas are available*/
+		*val = 0xff; //TODO Put it in config or define
 		irq_unlock(key);
 		return -1;
 	}
 	irq_unlock(key);
-	
 	return 0;
 }
 
@@ -181,60 +166,37 @@ static int i2c_mcumgr_rpro_isr(struct i2c_target_config *config, uint8_t* val){
  * we store it to be ready
  */
 static int i2c_mcumgr_store_raw(const void *data, int len){
-	const uint8_t *it = data; /* iterator to copy data */
-	while (len--) {
-		if(i2c_mcumgr_next_buf->length < sizeof(i2c_mcumgr_next_buf->data)){
-			i2c_mcumgr_next_buf->data[i2c_mcumgr_next_buf->length++] = *it++;
-		}
-		else{
-			return -1;
-		}
+	/* 	We need to make sure that master do not ask for
+		a response until the response buffer is ready */
+	unsigned int key = irq_lock();
+	int ret = ring_buf_put(&i2c_mcumgr_ring_tx, data, len);
+	if(ret != len){
+		printk("Not enough data in Ring Buffer ");
 	}
-	printk("[I2C RAW] RAW response len: %d\n", i2c_mcumgr_next_buf->length);
 
+	irq_unlock(key);
 	return 0;
 }
 
 int i2c_mcumgr_send(const uint8_t *data, int len){
-	unsigned int key = irq_lock();
-	if (i2c_mcumgr_next_buf == NULL){
-		i2c_mcumgr_next_buf = i2c_mcumgr_alloc_tx();
-		if(i2c_mcumgr_next_buf == NULL){
-			printk("[I2C mcumgr] mem alloc failed \n");
-			/* Mem allocation failed. Drop response */
-			irq_unlock(key);
-			return -1;
-		}
-		i2c_mcumgr_next_buf->send = 0;
-		i2c_mcumgr_next_buf->length = 0;
-	}
-	if (len > sizeof(i2c_mcumgr_next_buf->data)){
-		/* Response is too big. Dropping */
-		i2c_mcumgr_free_tx_buf(i2c_mcumgr_next_buf);
-		i2c_mcumgr_next_buf = NULL;
-		printk("[I2C mcumgr] Response too long \n");
-		irq_unlock(key);
-		return -1;
-	}
+	/* TODO check if response isn't too long */
 	printk("[I2C mcumgr] ok i have new response len: %d\n", len);
 	int ret = mcumgr_serial_tx_pkt(data, len, i2c_mcumgr_store_raw);
-	irq_unlock(key);
+	// irq_unlock(key);
 	return ret;
 };
+
 int i2c_mcumgr_stop(struct i2c_target_config *config){
-	printk("Stop i2c mcumgr\n");
-	/* Response is too big. Dropping */
-	i2c_mcumgr_free_tx_buf(i2c_mcumgr_next_buf);
-	i2c_mcumgr_next_buf = NULL;
-	
+	return 0;
 }
 static void i2c_mcumgr_setup(const struct device *i2c)
 {
+	
 	i2c_target_callback.write_received = i2c_mcumgr_wrec_isr;
 	i2c_target_callback.write_requested = i2c_mcumgr_wreq_isr;
 	i2c_target_callback.read_requested = i2c_mcumgr_rreq_isr;
 	i2c_target_callback.read_processed = i2c_mcumgr_rpro_isr;
-	// i2c_target_callback.stop = i2c_mcumgr_stop;
+	i2c_target_callback.stop = i2c_mcumgr_stop;
 
 	i2c_slave_conf.address = 0xA; // TODO put it in Device Tree (or conf)!
 	i2c_slave_conf.callbacks = &i2c_target_callback;
@@ -243,7 +205,6 @@ static void i2c_mcumgr_setup(const struct device *i2c)
 	if(error){
 		assert_print("Can't register device I2C: %d", error);
 	}
-	/*TODO empty FIFO ?*/
 }
 
 
