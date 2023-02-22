@@ -427,9 +427,7 @@ img_mgmt_upload(struct smp_streamer *ctxt)
 		 * the correct offset.
 		 */
 
-		/* Nasty but automatically set pending a new image*/
-		img_mgmt_state_set_pending(1, 0);
-		
+
 		return img_mgmt_upload_good_rsp(ctxt);
 	}
 

@@ -33,19 +33,14 @@ static struct i2c_target_config i2c_slave_conf;
 
 /* Fragment incoming should be ignoring (too long). */
 static bool i2c_mcumgr_ignoring;
-/** Contain the response to send to the controller **/
 
-// static struct i2c_mcumgr_tx_buf* i2c_mcumgr_next_buf; 
 
 /** Contains buffers to hold incoming request fragments. */
 K_MEM_SLAB_DEFINE(i2c_mcumgr_slab_rx, sizeof(struct i2c_mcumgr_rx_buf),
 		  CONFIG_I2C_MCUMGR_RX_BUF_COUNT, 1);
 
-/** Contains buffers that hold response until controller ask for it */
-K_MEM_SLAB_DEFINE(i2c_mcumgr_slab_tx, sizeof(struct i2c_mcumgr_tx_buf),
-		  CONFIG_I2C_MCUMGR_TX_BUF_COUNT, 1);
 
-RING_BUF_DECLARE(i2c_mcumgr_ring_tx, 512); /* TODO !! 512 in config */
+RING_BUF_DECLARE(i2c_mcumgr_ring_tx, CONFIG_MCUMGR_SMP_I2C_MTU * CONFIG_I2C_MCUMGR_TX_BUF_COUNT);
 
 static struct i2c_mcumgr_rx_buf *i2c_mcumgr_alloc_rx_buf(void)
 {
@@ -54,7 +49,6 @@ static struct i2c_mcumgr_rx_buf *i2c_mcumgr_alloc_rx_buf(void)
 	int rc;
 	rc = k_mem_slab_alloc(&i2c_mcumgr_slab_rx, &block, K_NO_WAIT);
 	if (rc != 0) {
-		printk("Oh seams to have memory issue\n");
 		return NULL;
 	}
 
@@ -86,7 +80,6 @@ static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
 	if(!i2c_mcumgr_ignoring){
 		if(i2c_mcumgr_cur_buf == NULL){
 			i2c_mcumgr_cur_buf = i2c_mcumgr_alloc_rx_buf();
-			printk("rx_buf->length : %d\n", i2c_mcumgr_cur_buf->length);
 			if(i2c_mcumgr_cur_buf == NULL){
 				/* Not enough buffers to contain all fragments -> drop */
 				i2c_mcumgr_ignoring = true;
@@ -104,7 +97,7 @@ static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
 			i2c_mcumgr_ignoring = true;
 		}else{
 			/* All good ! Storing data to the buffer */
-			if(val != 0x05){
+			if(val != CONFIG_I2C_MCUMGR_TARGET_READ_REGISTER_ADDRESS){
 				rx_buf->data[rx_buf->length++] = val;
 			}
 		}
@@ -112,18 +105,12 @@ static int i2c_mcumgr_wrec_isr(struct i2c_target_config *config, uint8_t val){
 	/* Check if fragment is complete */
 	if (val == '\n') {
 		if (i2c_mcumgr_ignoring) {
-			/**
-			 * TODO : if fragment is being ignored and stop transmitting
-			 * before '\n', the bool  i2c_mcumgr_ignoring will never be set
-			 * to false. The following fragment will be totally ignored 
-			 */
 
 			/* Stop ignoring */
 			i2c_mcumgr_ignoring = false;
 		} else {
 			i2c_mcumgr_cur_buf = NULL;
 			i2c_mgumgr_recv_cb(rx_buf);
-			printk(" Rx new frag: len: %d\n", rx_buf->length);
 		}
 	}
 
@@ -137,18 +124,12 @@ static int i2c_mcumgr_rreq_isr(struct i2c_target_config *config, uint8_t * val){
 	if (ring_buf_is_empty(&i2c_mcumgr_ring_tx) == 0) {
 		int ret = ring_buf_get(&i2c_mcumgr_ring_tx, val, 1);
 		if(ret != 1){
-			printk("[I2C RING] can't get value from buffer\n");
 			irq_unlock(key);
 			return -1;
-		}else{
-
-		printk("[I2C mcumgr] responding: %u (%d/%d bytes send)\n", *val,
-		       ring_buf_size_get(&i2c_mcumgr_ring_tx), ring_buf_capacity_get(&i2c_mcumgr_ring_tx));
 		}
 	} else {
-		printk("[I2C mcumgr] No data to send \n");
 		/* Signify to master that no more datas are available*/
-		*val = 0xff; //TODO Put it in config or define
+		*val = 0xff;
 		irq_unlock(key);
 		return -1;
 	}
@@ -179,10 +160,7 @@ static int i2c_mcumgr_store_raw(const void *data, int len){
 }
 
 int i2c_mcumgr_send(const uint8_t *data, int len){
-	/* TODO check if response isn't too long */
-	printk("[I2C mcumgr] ok i have new response len: %d\n", len);
 	int ret = mcumgr_serial_tx_pkt(data, len, i2c_mcumgr_store_raw);
-	// irq_unlock(key);
 	return ret;
 };
 
@@ -191,23 +169,19 @@ int i2c_mcumgr_stop(struct i2c_target_config *config){
 }
 static void i2c_mcumgr_setup(const struct device *i2c)
 {
-	
 	i2c_target_callback.write_received = i2c_mcumgr_wrec_isr;
 	i2c_target_callback.write_requested = i2c_mcumgr_wreq_isr;
 	i2c_target_callback.read_requested = i2c_mcumgr_rreq_isr;
 	i2c_target_callback.read_processed = i2c_mcumgr_rpro_isr;
 	i2c_target_callback.stop = i2c_mcumgr_stop;
 
-	i2c_slave_conf.address = 0xA; // TODO put it in Device Tree (or conf)!
+	i2c_slave_conf.address = CONFIG_I2C_MCUMGR_TARGET_ADDRESS;
 	i2c_slave_conf.callbacks = &i2c_target_callback;
-
 	int error = i2c_target_register(i2c, &i2c_slave_conf);
-	if(error){
+	if (error) {
 		assert_print("Can't register device I2C: %d", error);
 	}
 }
-
-
 
 void i2c_mcumgr_register(i2c_mcumgr_recv_fn *cb)
 {

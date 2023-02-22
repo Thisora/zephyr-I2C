@@ -190,8 +190,11 @@ config IPM_CONSOLE_LINE_BUF_LEN
 config I2C_MCUMGR
 	bool "Mcumgr I2C driver"
 	select I2C_INTERRUPT_DRIVEN
+	depends on I2C
 	help
-	  TODO
+	  Enable the mcumgr I2C driver. This driver allows the application to
+	  communicate over I2C using the mcumgr protocol for image upgrade and
+	  device management. 
 
 if I2C_MCUMGR
 
@@ -203,23 +206,42 @@ config I2C_MCUMGR_RX_BUF_SIZE
 	  value must be large enough to accommodate any line sent by an mcumgr
 	  client.
 
-config I2C_MCUMGR_TX_BUF_SIZE
-	int "Size of the buffer that contain a the next response to transmit"
-	default 1024
+config I2C_MCUMGR_TX_BUF_COUNT
+	int "Number of response that can be stored before master ask responses"
+	range 1 10
+	default 2
 	help
-	  TODO
+	  Number of responses that can be stored un ring buffer before master ask
+	  for response. Responses are overrided if ring buffer is full. Final
+	  ring buffer size will be  = MCUMGR_SMP_I2C_MTU * I2C_MCUMGR_TX_BUF_COUNT.
 
 config I2C_MCUMGR_RX_BUF_COUNT
 	int "Number of receive buffers for mcumgr fragments received over I2C"
 	default 2
 	help
-	  TODO
+	  Specifies the number of the mcumgr I2C receive buffers.  Receive
+	  buffers hold received mcumgr fragments prior to reassembly.  This
+	  setting's value must satisfy the following relation:
+	  I2C_MCUMGR_RX_BUF_COUNT * I2C_MCUMGR_RX_BUF_SIZE >=
+	  MCUMGR_SMP_I2C_MTU
 
-config I2C_MCUMGR_TX_BUF_COUNT
-	int "Number of response that target is holding until controller ask for it"
-	default 1
+config I2C_MCUMGR_TARGET_ADDRESS
+	int "I2C address of the device for mcumgr"
+	default 10
 	help
-	  TODO
+	  Specifies the address I2C of the controller used in target mode.
+	  This address will be used to listen on new SMP commands.
+	  Default address is 0xA
+
+config I2C_MCUMGR_TARGET_READ_REGISTER_ADDRESS
+	int "Register of the target that is used to read response"
+	default 5
+	help
+	  Specifies the register address that contain the SMP response
+	  master should submit an I2C read request on this address to
+	  consult the response prepared by SMP server.
+
+
 
 endif #I2C_MCUMGR
 
